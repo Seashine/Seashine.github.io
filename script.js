@@ -1,78 +1,172 @@
-var canvas = document.getElementById( 'canvas' ),
-		ctx = canvas.getContext( '2d' ),
-    canvas2 = document.getElementById( 'canvas2' ),
-    ctx2 = canvas2.getContext( '2d' ),
-		// full screen dimensions
-		cw = window.innerWidth,
-		ch = window.innerHeight,
-    charArr = ['a','b','c','d','e','f','g','h','i','j','k','l','m','n','o','p','q','r','s','t','u','v','w','x','y','z'],
-    maxCharCount = 100,
-    fallingCharArr = [],
-    fontSize = 10,
-    maxColums = cw/(fontSize);
-    canvas.width = canvas2.width = cw;
-    canvas.height = canvas2.height = ch;
+var scanlines = $('.scanlines');
+var tv = $('.tv');
+function exit() {
+    $('.tv').addClass('collapse');
+    term.disable();
+}
 
+// ref: https://stackoverflow.com/q/67322922/387194
+var __EVAL = (s) => eval(`void (__EVAL = ${__EVAL}); ${s}`);
 
-    function randomInt( min, max ) {
-    	return Math.floor(Math.random() * ( max - min ) + min);
-    }
-
-    function randomFloat( min, max ) {
-    	return Math.random() * ( max - min ) + min;
-    }
-
-    function Point(x,y)
-    {
-      this.x = x;
-      this.y = y;
-    }
-
-    Point.prototype.draw = function(ctx){
-
-      this.value = charArr[randomInt(0,charArr.length-1)].toUpperCase();
-      this.speed = randomFloat(1,5);
-
-
-      ctx2.fillStyle = "rgba(255,255,255,0.8)";
-      ctx2.font = fontSize+"px san-serif";
-      ctx2.fillText(this.value,this.x,this.y);
-
-        ctx.fillStyle = "#0F0";
-        ctx.font = fontSize+"px san-serif";
-        ctx.fillText(this.value,this.x,this.y);
-
-
-
-        this.y += this.speed;
-        if(this.y > ch)
-        {
-          this.y = randomFloat(-100,0);
-          this.speed = randomFloat(2,5);
+var term = $('#terminal').terminal(function(command, term) {
+    var cmd = $.terminal.parse_command(command);
+    if (cmd.name === 'exit') {
+        exit();
+    } else if (cmd.name === 'echo') {
+        term.echo(cmd.rest);
+    } else if (command !== '') {
+        try {
+            var result = __EVAL(command);
+            if (result && result instanceof $.fn.init) {
+                term.echo('<#jQuery>');
+            } else if (result && typeof result === 'object') {
+                tree(result);
+            } else if (result !== undefined) {
+                term.echo(new String(result));
+            }
+        } catch(e) {
+            term.error(new String(e));
         }
     }
+}, {
+    name: 'js_demo',
+    onResize: set_size,
+    exit: false,
+    // detect iframe codepen preview
+    enabled: $('body').attr('onload') === undefined,
+    onInit: function() {
+        set_size();
+        this.echo('Type [[b;#fff;]exit] to see turn off animation.');
+        this.echo('Type and execute [[b;#fff;]grab()] function to get the scre' +
+                  'enshot from your camera');
+        this.echo('Type [[b;#fff;]camera()] to get video and [[b;#fff;]pause()]/[[b;#fff;]play()] to stop/play');
+    },
+    onClear: function() {
+        console.log(this.find('video').length);
+        this.find('video').map(function() {
+            console.log(this.src);
+            return this.src;
+        });
+    },
+    prompt: 'js> '
+});
+// for codepen preview
+if (!term.enabled()) {
+    term.find('.cursor').addClass('blink');
+}
+function set_size() {
+    // for window height of 170 it should be 2s
+    var height = $(window).height();
+    var width = $(window).width()
+    var time = (height * 2) / 170;
+    scanlines[0].style.setProperty("--time", time);
+    tv[0].style.setProperty("--width", width);
+    tv[0].style.setProperty("--height", height);
+}
 
-    for(var i = 0; i < maxColums ; i++) {
-      fallingCharArr.push(new Point(i*fontSize,randomFloat(-500,0)));
+function tree(obj) {
+    term.echo(treeify.asTree(obj, true, true));
+}
+var constraints = {
+    audio: false,
+    video: {
+        width: { ideal: 1280 },
+        height: { ideal: 1024 },
+        facingMode: "environment"
     }
-
-
-    var update = function()
-    {
-
-    ctx.fillStyle = "rgba(0,0,0,0.05)";
-    ctx.fillRect(0,0,cw,ch);
-
-    ctx2.clearRect(0,0,cw,ch);
-
-      var i = fallingCharArr.length;
-
-      while (i--) {
-        fallingCharArr[i].draw(ctx);
-        var v = fallingCharArr[i];
-      }
-
-      requestAnimationFrame(update);
+};
+var acceptStream = (function() {
+    return 'srcObject' in document.createElement('video');
+})();
+function camera() {
+    if (navigator.mediaDevices && navigator.mediaDevices.getUserMedia) {
+        term.pause();
+        var media = navigator.mediaDevices.getUserMedia(constraints);
+        media.then(function(mediaStream) {
+            term.resume();
+            var stream;
+            if (!acceptStream) {
+                stream = window.URL.createObjectURL(mediaStream);
+            } else {
+                stream = mediaStream;
+            }
+            term.echo('<video data-play="true" class="self"></video>', {
+                raw: true,
+                onClear: function() {
+                    if (!acceptStream) {
+                        URL.revokeObjectURL(stream);
+                    }
+                    mediaStream.getTracks().forEach(track => track.stop());
+                },
+                finalize: function(div) {
+                    var video = div.find('video');
+                    if (!video.length) {
+                        return;
+                    }
+                    if (acceptStream) {
+                        video[0].srcObject = stream;
+                    } else {
+                        video[0].src = stream;
+                    }
+                    if (video.data('play')) {
+                        video[0].play();
+                    }
+                }
+            });
+        });
     }
+}
+var play = function() {
+    var video = term.find('video').slice(-1);
+    if (video.length) {
+        video[0].play();
+    }
+}
+function pause() {
+    term.find('video').each(function() {
+        this.pause(); 
+    });
+}
 
-  update();
+function grab() {
+    if (navigator.mediaDevices && navigator.mediaDevices.getUserMedia) {
+        term.pause();
+        var media = navigator.mediaDevices.getUserMedia(constraints);
+        media.then(function(mediaStream) {
+            const mediaStreamTrack = mediaStream.getVideoTracks()[0];
+            const imageCapture = new ImageCapture(mediaStreamTrack);
+            return imageCapture.takePhoto();
+        }).then(function(blob) {
+            term.echo('<img src="' + URL.createObjectURL(blob) + '" class="self"/>', {
+                raw: true,
+                finialize: function(div) {
+                    div.find('img').on('load', function() {
+                        URL.revokeObjectURL(this.src);
+                    });
+                }
+            }).resume();
+        }).catch(function(error) {
+            term.error('Device Media Error: ' + error);
+        });
+    }
+}
+async function pictuteInPicture() {
+    var [video] = $('video');
+    try {
+        if (video) {
+            if (video !== document.pictureInPictureElement) {
+                await video.requestPictureInPicture();
+            } else {
+                await document.exitPictureInPicture();
+            }
+        }
+  } catch(error) {
+      term.error(error);
+  }
+}
+function clear() {
+    term.clear();
+}
+
+github('jcubic/jquery.terminal');
+cssVars(); // ponyfill
